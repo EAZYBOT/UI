@@ -1,4 +1,7 @@
 #include "StateHandler.h"
+#include <stack>
+#include <fstream>
+#include <vector>
 
 HWND this_parent;
 HWND this_etTableNameHwnd;
@@ -14,13 +17,19 @@ HWND this_llComparisonSignsHwnd;
 HMENU this_hMenu;
 HMENU this_hSubMenu;
 
-const int UI_ELEMENTS_COUNT = 10;
-const int UI_STATES_COUNT = 15;
-const int UI_INPUT_SIGNALS_COUNT = 6;
+HWND this_llArchive;
+HWND this_btnUp;
+HWND this_btnDown;
+HWND this_btnCancel;
+HWND this_btnArchvie;
 
-void(*stateMatrix[6][15])();
-UI_STATES transitionMatrix[6][15];
-UI_CONTEXT_STATE contextMatrix[15][10];
+const int UI_ELEMENTS_COUNT = 15;
+const int UI_STATES_COUNT = 18;
+const int UI_INPUT_SIGNALS_COUNT = 10;
+
+void(*stateMatrix[UI_INPUT_SIGNALS_COUNT][UI_STATES_COUNT])();
+UI_STATES transitionMatrix[UI_INPUT_SIGNALS_COUNT][UI_STATES_COUNT];
+UI_CONTEXT_STATE contextMatrix[UI_STATES_COUNT][UI_ELEMENTS_COUNT];
 UI_STATES currentState;
 
 std::map<UI_ELEMENTS, HWND> elementsToHwnd;
@@ -36,6 +45,13 @@ char **selectedColumns = nullptr;
 char **tableColumns = nullptr;
 int tableColumnsNumber = 0;
 
+bool returningState = false;
+std::stack<UI_STATES> stateStack;
+
+int rowCount;
+int colCount;
+char ***this_selectResult = nullptr;
+
 void initStateHandler(
 	HWND parent,
     HWND etTableName,
@@ -47,10 +63,16 @@ void initStateHandler(
     HWND btnNext,
     HWND etComparisonValue,
     HWND llComparisonSigns,
-	HMENU hMenu
+	HMENU hMenu,
+
+	HWND btnUp,
+	HWND btnDown,
+	HWND btnCancel,
+	HWND btnArchive,
+	HWND llArchive
 ) {
-	
-	this_parent = parent;
+    this_parent = parent;
+
 	elementsToHwnd[UI_ELEMENTS::TABLE_NAME_EDIT] = this_etTableNameHwnd = etTableName;
 	elementsToHwnd[UI_ELEMENTS::TABLE_ATTRS_LIST] = this_llTableFieldsHwnd = llTableFields;
 	elementsToHwnd[UI_ELEMENTS::SQL_STATEMENT_EDIT] = this_etSelectQueryHwnd = etSelectQuery;
@@ -60,17 +82,120 @@ void initStateHandler(
 	elementsToHwnd[UI_ELEMENTS::NEXT_BTN] = this_btnNextHwnd = btnNext;
 	elementsToHwnd[UI_ELEMENTS::COMPARISON_EDIT] = this_etComparisonValueHwnd = etComparisonValue;
 	elementsToHwnd[UI_ELEMENTS::COMPARISON_DROP_LIST] = this_llComparisonSignsHwnd = llComparisonSigns;
-	
+
+    elementsToHwnd[UI_ELEMENTS::ARCHIVE_LISTBOX] = this_llArchive = llArchive;
+    elementsToHwnd[UI_ELEMENTS::BTN_CANCEL] = this_btnCancel = btnCancel;
+    elementsToHwnd[UI_ELEMENTS::BTN_ARCHIVE] = this_btnArchvie = btnArchive;
+    elementsToHwnd[UI_ELEMENTS::BTN_UP] = this_btnUp = btnUp;
+    elementsToHwnd[UI_ELEMENTS::BTN_DOWN] = this_btnDown = btnDown;
+
 	this_hMenu = hMenu;
 	this_hSubMenu = GetSubMenu(hMenu, 0);
 
 	initStateMatrix();
 	initTransitionMatrix();
 	initContextMatrix();
-
 }
 
 void initStateMatrix() {
+    const auto archiveLambda = []() {
+        stateStack.push(currentState);
+        inflateArchive();
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::MODE_SELECTION_1] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_SELECTION_2] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTRS_SELECTION_3] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::ERROR_MSG_4] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::QUERY_RESULT_OUTPUT_5] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_SELECTION_6] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTRS_SELECTION_7] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::ERROR_MSG_8] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::QUERY_RESULT_OUTPUT_9] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTR_SELECTION_10] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::COMPARISON_SIGN_SELECTION_11] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::COMPARISON_VALUE_INPUT_12] = archiveLambda;
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::LOGICAL_OPERATION_SELECTION_13] = archiveLambda;
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_UP_BTN][UI_STATES::ARCHIVE_OPENED_14] = []() {
+        int curPos = ListBox_GetCurSel(this_llArchive);
+        if (curPos <= 0) {
+            ListBox_SetCurSel(this_llArchive, 0);
+        } else {
+            ListBox_SetCurSel(this_llArchive, curPos - 1);
+        }
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_UP_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = []() {
+        int curPos = ListBox_GetCurSel(this_llArchive);
+        if (curPos <= 0) {
+            ListBox_SetCurSel(this_llArchive, 0);
+        } else {
+            ListBox_SetCurSel(this_llArchive, curPos - 1);
+        }
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_DOWN_BTN][UI_STATES::ARCHIVE_OPENED_14] = []() {
+        int curPos = ListBox_GetCurSel(this_llArchive);
+        int itemCount = ListBox_GetCount(this_llArchive);
+
+        if (curPos >= itemCount) {
+            ListBox_SetCurSel(this_llArchive, itemCount - 1);
+        } else {
+            ListBox_SetCurSel(this_llArchive, curPos + 1);
+        }
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_DOWN_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = []() {
+        int curPos = ListBox_GetCurSel(this_llArchive);
+        int itemCount = ListBox_GetCount(this_llArchive);
+
+        if (curPos >= itemCount) {
+            ListBox_SetCurSel(this_llArchive, itemCount - 1);
+        } else {
+            ListBox_SetCurSel(this_llArchive, curPos + 1);
+        }
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_CANCEL_BTN][UI_STATES::ARCHIVE_OPENED_14] = []() { returningState = true; };
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_CANCEL_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = []() { returningState = true; };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = []() {
+        clearListView();
+        int selectedPos = ListBox_GetCurSel(this_llArchive);
+        if (selectedPos == LB_ERR) { return; }
+
+        char selectQuery[1000];
+        ListBox_GetText(this_llArchive, selectedPos, selectQuery);
+
+        int archive_rowCount;
+        int archive_colCount;
+        char **archive_colNames;
+        char ***archive_selectResult = makeSelectQuery(selectQuery, &archive_rowCount, &archive_colCount, &archive_colNames);
+        inflateLvHeader(archive_colNames, archive_colCount);
+        inflateSelectLvBody(archive_selectResult, archive_rowCount, archive_colCount);
+
+        for (int i = 0; i < archive_colCount; i++) {
+            free(archive_colNames[i]);
+        }
+        free(archive_colNames);
+
+        for (int i = 0; i < archive_rowCount; i++) {
+            for (int j = 0; j < archive_colCount; j++) {
+                free(archive_selectResult[i][j]);
+            }
+            free(archive_selectResult[i]);
+        }
+        free(archive_selectResult);
+    };
+
+    stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::ARCHIVE_SELECT_RESULT_OUTPUT_16] = [] {
+        returningState = true;
+        clearListView();
+        inflateLvHeader(tableColumns, colCount);
+        inflateSelectLvBody(this_selectResult, rowCount, colCount);
+    };
+
     stateMatrix[UI_INPUT_SIGNALS::CLICK_MENU_TABLE][UI_STATES::MODE_SELECTION_1] = []() {
         ResetContext();
     };
@@ -97,34 +222,32 @@ void initStateMatrix() {
 
     stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::TABLE_ATTRS_SELECTION_3] = []() {
         finishSelectQuery();
-        int columnsToInflate;
+        clearListView();
+
         if (selectedColumnsNumber > 0) {
             inflateLvHeader(selectedColumns, selectedColumnsNumber);
-            columnsToInflate = selectedColumnsNumber;
-        }
-        else {
+            colCount = selectedColumnsNumber;
+        } else {
+            colCount = tableColumnsNumber;
             inflateLvHeader(tableColumns, tableColumnsNumber);
-            columnsToInflate = tableColumnsNumber;
         }
+
+        for (int i = 0; i < rowCount; i++) {
+            for (int j = 0; j < colCount; j++) {
+                free(this_selectResult[i][j]);
+            }
+            free(this_selectResult[i]);
+        }
+        free(this_selectResult);
 
         char* selectStatement = (char*)malloc(sizeof(char) * 500);
         GetWindowText(this_etSelectQueryHwnd, selectStatement, 500);
 
-        int rowCount;
-		char ***selectResult = makeSelectQuery(selectStatement, &rowCount);
+        this_selectResult = makeSelectQuery(selectStatement, &rowCount);
         free(selectStatement);
-        if (selectResult != NULL) {
-            inflateSelectLvBody(selectResult, rowCount, columnsToInflate);
-
-            for (int i = 0; i < rowCount; i++) {
-                for (int j = 0; j < columnsToInflate; j++) {
-                    free(selectResult[i][j]);
-                }
-                free(selectResult[i]);
-            }
-            free(selectResult);
-        }
-        else {
+        if (this_selectResult != NULL) {
+            inflateSelectLvBody(this_selectResult, rowCount, colCount);
+        } else {
 			strcpy(ErrorMSG, "Ошибка при выполнении запроса");
 			PostMessage(this_parent, WM_ERRMSG, (WPARAM)0, (LPARAM)UI_STATES::ERROR_MSG_4);
         }
@@ -135,6 +258,7 @@ void initStateMatrix() {
     };
 
     stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::QUERY_RESULT_OUTPUT_5] = []() {
+        saveQueryToFile();
         ResetContext();
     };
 
@@ -156,33 +280,32 @@ void initStateMatrix() {
 
     stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::TABLE_ATTRS_SELECTION_7] = []() {
 		finishSelectQuery();
-		int columnsToInflate;
+		clearListView();
+
 		if (selectedColumnsNumber > 0) {
 			inflateLvHeader(selectedColumns, selectedColumnsNumber);
-			columnsToInflate = selectedColumnsNumber;
-		}
-		else {
+			colCount = selectedColumnsNumber;
+		} else {
 			inflateLvHeader(tableColumns, tableColumnsNumber);
-			columnsToInflate = tableColumnsNumber;
+			colCount = tableColumnsNumber;
 		}
+
+        for (int i = 0; i < rowCount; i++) {
+            for (int j = 0; j < colCount; j++) {
+                free(this_selectResult[i][j]);
+            }
+            free(this_selectResult[i]);
+        }
+        free(this_selectResult);
 
 		char* selectStatement = (char*)malloc(sizeof(char) * 500);
 		GetWindowText(this_etSelectQueryHwnd, selectStatement, 500);
 
-		int rowCount;
-		char ***selectResult = makeSelectQuery(selectStatement, &rowCount);
+		this_selectResult = makeSelectQuery(selectStatement, &rowCount);
 		free(selectStatement);
-		if (selectResult != NULL) {
-			inflateSelectLvBody(selectResult, rowCount, columnsToInflate);
-            for (int i = 0; i < rowCount; i++) {
-                for (int j = 0; j < columnsToInflate; j++) {
-                    free(selectResult[i][j]);
-                }
-                free(selectResult[i]);
-            }
-            free(selectResult);
-		}
-		else {
+		if (this_selectResult != NULL) {
+			inflateSelectLvBody(this_selectResult, rowCount, colCount);
+		} else {
 			strcpy(ErrorMSG, "Ошибка при выполнении запроса");
 			PostMessage(this_parent, WM_ERRMSG, (WPARAM)0, (LPARAM)UI_STATES::ERROR_MSG_8);
 		}
@@ -197,6 +320,7 @@ void initStateMatrix() {
     };
 
     stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::QUERY_RESULT_OUTPUT_9] = []() {
+        saveQueryToFile();
 		ResetContext();
     };
 
@@ -226,33 +350,24 @@ void initStateMatrix() {
 
     stateMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::LOGICAL_OPERATION_SELECTION_13] = []() {
 		ComboBox_ResetContent(this_llComparisonSignsHwnd);
-		int columnsToInflate;
+		clearListView();
+
 		if (selectedColumnsNumber > 0) {
 			inflateLvHeader(selectedColumns, selectedColumnsNumber);
-			columnsToInflate = selectedColumnsNumber;
-		}
-		else {
+			colCount = selectedColumnsNumber;
+		} else {
 			inflateLvHeader(tableColumns, tableColumnsNumber);
-			columnsToInflate = tableColumnsNumber;
+			colCount = tableColumnsNumber;
 		}
 
 		char* selectStatement = (char*)malloc(sizeof(char) * 500);
 		GetWindowText(this_etSelectQueryHwnd, selectStatement, 500);
 
-		int rowCount;
-		char ***selectResult = makeSelectQuery(selectStatement, &rowCount);
+		this_selectResult = makeSelectQuery(selectStatement, &rowCount);
 		free(selectStatement);
-		if (selectResult != NULL) {
-			inflateSelectLvBody(selectResult, rowCount, columnsToInflate);
-            for (int i = 0; i < rowCount; i++) {
-                for (int j = 0; j < columnsToInflate; j++) {
-                    free(selectResult[i][j]);
-                }
-                free(selectResult[i]);
-            }
-            free(selectResult);
-		}
-		else {
+		if (this_selectResult != NULL) {
+			inflateSelectLvBody(this_selectResult, rowCount, colCount);
+		} else {
 			strcpy(ErrorMSG, "Ошибка при выполнении запроса");
 			PostMessage(this_parent, WM_ERRMSG, (WPARAM)0, (LPARAM)UI_STATES::ERROR_MSG_8);
 		}
@@ -300,25 +415,50 @@ void initTransitionMatrix() {
     transitionMatrix[UI_INPUT_SIGNALS::CLICK_NEXT_BTN][UI_STATES::LOGICAL_OPERATION_SELECTION_13] = UI_STATES::TABLE_ATTR_SELECTION_10;
 
     transitionMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::LOGICAL_OPERATION_SELECTION_13] = UI_STATES::QUERY_RESULT_OUTPUT_9;
+
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::MODE_SELECTION_1] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_SELECTION_2] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTRS_SELECTION_3] = UI_STATES::ARCHIVE_OPENED_14;
+//    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::ERROR_MSG_4] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::QUERY_RESULT_OUTPUT_5] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_SELECTION_6] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTRS_SELECTION_7] = UI_STATES::ARCHIVE_OPENED_14;
+//    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::ERROR_MSG_8] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::QUERY_RESULT_OUTPUT_9] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::TABLE_ATTR_SELECTION_10] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::COMPARISON_SIGN_SELECTION_11] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::COMPARISON_VALUE_INPUT_12] = UI_STATES::ARCHIVE_OPENED_14;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_ARCHIVE_BTN][UI_STATES::LOGICAL_OPERATION_SELECTION_13] = UI_STATES::ARCHIVE_OPENED_14;
+
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_UP_BTN][UI_STATES::ARCHIVE_OPENED_14] = UI_STATES::ARCHIVE_ITEM_SELECTED_15;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_UP_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = UI_STATES::ARCHIVE_ITEM_SELECTED_15;
+
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_DOWN_BTN][UI_STATES::ARCHIVE_OPENED_14] = UI_STATES::ARCHIVE_ITEM_SELECTED_15;
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_DOWN_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = UI_STATES::ARCHIVE_ITEM_SELECTED_15;
+
+    transitionMatrix[UI_INPUT_SIGNALS::CLICK_OK_BTN][UI_STATES::ARCHIVE_ITEM_SELECTED_15] = UI_STATES::ARCHIVE_SELECT_RESULT_OUTPUT_16;
 }
 
 void initContextMatrix() {
 	std::string tempMatrix[] = {
-		"0000000000",
-		"2000000000",
-		"0012110000",
-		"0021120000",
-		"0011110002",
-		"0211120000",
-		"0012111110",
-		"0021122110",
-		"0011111112",
-		"0211121110",
-		"0021112110",
-		"0011112120",
-		"0011112210",
-		"0011122120",
-		"0000000000"
+		"000000000000000", // START
+		"200000000000000", // MODE_SELECTION_1
+		"001211000020000", // TABLE_SELECTION_2
+		"002112000020000", // TABLE_ATTRS_SELECTION_3
+		"001111000020002", // ERROR_MSG_4
+		"021112000020000", // QUERY_RESULT_OUTPUT_5
+		"001211111020000", // TABLE_SELECTION_6
+		"002112211020000", // TABLE_ATTRS_SELECTION_7
+		"001111111002002", // ERROR_MSG_8
+		"021112111020000", // QUERY_RESULT_OUTPUT_9
+		"002111211020000", // TABLE_ATTR_SELECTION_10
+		"001111212020000", // COMPARISON_SIGN_SELECTION_11
+		"001111221020000", // COMPARISON_VALUE_INPUT_12
+		"001112212020000", // LOGICAL_OPERATION_SELECTION_13
+		"000001000102220", // ARCHIVE_OPENED_14
+		"000002000102220", // ARCHIVE_ITEM_SELECTED_15
+		"020002000000000", // ARCHIVE_SELECT_RESULT_OUTPUT_16
+		"000000000000000" // FINISH
 	};
 
 	for (int i = 0; i < UI_STATES_COUNT; i++) {
@@ -332,7 +472,6 @@ void initContextMatrix() {
 void switchContext(UI_STATES st) {
 	switch (contextMatrix[st][UI_ELEMENTS::MENU])
 	{
-
         case UI_CONTEXT_STATE::INVISIBLE: {
             RemoveMenu(this_hMenu,(UINT_PTR) this_hSubMenu, MF_BYCOMMAND);
             break;
@@ -390,7 +529,14 @@ void switchContext(UI_STATES st) {
 
 void switchState(UI_INPUT_SIGNALS signal) {
     stateMatrix[signal][currentState]();
-    currentState = transitionMatrix[signal][currentState];
+
+    if (returningState) {
+        currentState = stateStack.top();
+        stateStack.pop();
+        returningState = false;
+    } else {
+        currentState = transitionMatrix[signal][currentState];
+    }
     switchContext(currentState);
 }
 
@@ -421,17 +567,7 @@ void ResetContext() {
 	ListBox_ResetContent(this_llTableFieldsHwnd);
 	Edit_SetText(this_etSelectQueryHwnd, "");
 	ListView_DeleteAllItems(this_llSelectHwnd);
-
-	if (selectedColumnsNumber > 0) {
-		for (int i = 0; i < selectedColumnsNumber; i++) {
-			ListView_DeleteColumn(this_llSelectHwnd, 0);
-		}
-	}
-	else {
-		for (int i = 0; i < tableColumnsNumber; i++) {
-			ListView_DeleteColumn(this_llSelectHwnd, 0);
-		}
-	}
+	clearColumns();
 	tableColumnsNumber = 0;
 	selectedColumnsNumber = 0;
 }
@@ -583,4 +719,56 @@ void inflateSelectLvBody(
             ListView_SetItem(this_llSelectHwnd, &item);
         }
     }
+}
+
+void saveQueryToFile() {
+    char buffer[2000];
+    GetWindowText(this_etSelectQueryHwnd, buffer, 2000);
+
+    std::ofstream outfile;
+    outfile.open("archive.txt", std::ios_base::app);
+    outfile << buffer << std::endl;
+}
+
+void inflateArchive() {
+    SendMessage(
+        this_llArchive,
+        LB_RESETCONTENT,
+        0, 0L
+    );
+
+    std::ifstream archiveFile("archive.txt");
+    std::string line;
+    std::vector<std::string> lines;
+
+    while (std::getline(archiveFile, line)) {
+       lines.push_back(line);
+    }
+
+    for (int i = 0; i < lines.size(); i++) {
+        int pos = (int) SendMessage(
+            this_llArchive,
+            LB_ADDSTRING,
+            0,
+            (LPARAM) lines[i].c_str()
+        );
+
+        SendMessage(this_llArchive, LB_SETITEMDATA, pos, (LPARAM) i);
+    }
+
+    SetFocus(this_llArchive);
+}
+
+void clearColumns() {
+    HWND header = ListView_GetHeader(this_llSelectHwnd);
+    int columnCount = Header_GetItemCount(header);
+
+    for (int i = 0; i < columnCount; i++) {
+        ListView_DeleteColumn(this_llSelectHwnd, 0);
+    }
+}
+
+void clearListView() {
+    ListView_DeleteAllItems(this_llArchive);
+    clearColumns();
 }
